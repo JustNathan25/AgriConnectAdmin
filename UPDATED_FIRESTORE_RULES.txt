@@ -1,0 +1,302 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =============================
+    // 🔹 HELPER FUNCTIONS
+    // =============================
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isAdmin() {
+      return request.auth != null 
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    function isOwner(userId) {
+      return request.auth != null && request.auth.uid == userId;
+    }
+
+    /* ===========================
+       👤 USERS COLLECTION
+    =========================== */
+    match /users/{userId} {
+      // Users can read all, create their own, update own profile
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && isOwner(userId);
+      allow update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+      
+      // User's reviews subcollection (legacy)
+      match /reviews/{reviewId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+      
+      // ⭐ NEW REVIEW SYSTEM - Reviews received by this user
+      match /reviews_received/{reviewId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+      
+      // ⭐ NEW REVIEW SYSTEM - Reviews given by this user
+      match /reviews_given/{reviewId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+      
+      // ⭐ NEW REVIEW SYSTEM - Rating summary/statistics
+      match /rating_summary/{summaryId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn();
+        allow delete: if isAdmin();
+      }
+      
+      // 🔔 User notifications subcollection
+      match /notifications/{notificationId} {
+        allow read: if isOwner(userId);
+        allow write: if isSignedIn();
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+      
+      // 🌾 User's crops subcollection
+      match /crops/{cropId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+      
+      // 🌾 User's farm products subcollection
+      match /farm_products/{productId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+        allow delete: if isOwner(userId) || isAdmin();
+      }
+      
+      // ❤️ User's likes subcollection
+      match /likes/{likeId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+        allow delete: if isOwner(userId);
+      }
+      
+      // ❤️ User's liked products
+      match /likedProducts/{productId} {
+        allow read: if isSignedIn();
+        allow write: if isOwner(userId);
+        allow delete: if isOwner(userId);
+      }
+    }
+
+    /* ===========================
+       🛒 PRODUCTS COLLECTION
+    =========================== */
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() 
+                    && (request.auth.uid == resource.data.sellerId || isAdmin());
+      allow delete: if isAdmin() 
+                    || (isSignedIn() && request.auth.uid == resource.data.sellerId);
+
+      match /reviews/{reviewId} {
+        allow read: if isSignedIn();
+        allow write: if isSignedIn();
+        allow delete: if isSignedIn() || isAdmin();
+      }
+    }
+
+    /* ===========================
+       💬 CHATS COLLECTION
+    =========================== */
+    match /chats/{chatId} {
+      allow read: if isSignedIn() 
+                  && (request.auth.uid in resource.data.participants || isAdmin());
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() 
+                    && (request.auth.uid in resource.data.participants || isAdmin());
+      allow delete: if isAdmin();
+      
+      match /messages/{messageId} {
+        allow read: if isSignedIn();
+        allow create: if isSignedIn();
+        allow update: if isSignedIn() 
+                      && request.auth.uid == resource.data.senderId;
+        allow delete: if isAdmin();
+      }
+    }
+
+    /* ===========================
+       🚨 REPORTS COLLECTION (Chat Reports)
+    =========================== */
+    match /reports/{reportId} {
+      allow create: if isSignedIn();
+      allow read: if isAdmin() || isOwner(resource.data.reportedBy);
+      allow update, delete: if isAdmin();
+    }
+
+    /* ===========================
+       🎫 TICKETS COLLECTION (Product/Profile Reports)
+    =========================== */
+    match /tickets/{ticketId} {
+      allow create: if isSignedIn();
+      allow read: if isAdmin() || isOwner(resource.data.reportedBy);
+      allow update, delete: if isAdmin();
+    }
+
+    /* ===========================
+       ⭐ REVIEWS COLLECTION (Master)
+    =========================== */
+    match /reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn();
+      allow update: if isSignedIn() 
+                    && request.auth.uid == resource.data.reviewerUserId;
+      allow delete: if isAdmin() 
+                    || (isSignedIn() && request.auth.uid == resource.data.reviewerUserId);
+    }
+    
+    /* ===========================
+       ⭐ REVIEW REPORTS COLLECTION
+    =========================== */
+    match /review_reports/{reportId} {
+      allow create: if isSignedIn();
+      allow read: if isAdmin() || isOwner(resource.data.reportedBy);
+      allow update, delete: if isAdmin();
+    }
+
+    /* ===========================
+       🔔 NOTIFICATIONS COLLECTION (Global)
+    =========================== */
+    match /notifications/{notificationId} {
+      // Users can read their own notifications
+      allow read: if isSignedIn() && isOwner(resource.data.userId);
+      
+      // Admins can create notifications (warnings, deletions, etc.)
+      allow create: if isAdmin();
+      
+      // Users can only update the 'read' field on their own notifications
+      allow update: if isSignedIn() 
+                    && isOwner(resource.data.userId)
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      
+      // Only admins can delete notifications
+      allow delete: if isAdmin();
+    }
+
+    /* ===========================
+       ⚠️ USER WARNINGS COLLECTION (NEW)
+    =========================== */
+    match /user_warnings/{warningId} {
+      // Users can read their own warnings
+      allow read: if isSignedIn() && isOwner(resource.data.userId);
+      
+      // Only admins can create warnings
+      allow create: if isAdmin();
+      
+      // Users can acknowledge warnings (update acknowledged and acknowledgedAt only)
+      // Admins can update anything
+      allow update: if isAdmin() 
+                    || (isSignedIn() 
+                        && isOwner(resource.data.userId)
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acknowledged', 'acknowledgedAt']));
+      
+      // Only admins can delete warnings
+      allow delete: if isAdmin();
+    }
+
+    /* ===========================
+       📦 PRODUCT WARNINGS COLLECTION (NEW)
+    =========================== */
+    match /product_warnings/{warningId} {
+      // Sellers can read warnings for their products
+      allow read: if isSignedIn() && isOwner(resource.data.sellerId);
+      
+      // Only admins can create product warnings
+      allow create: if isAdmin();
+      
+      // Sellers can acknowledge warnings (update acknowledged and acknowledgedAt only)
+      // Admins can update anything
+      allow update: if isAdmin() 
+                    || (isSignedIn() 
+                        && isOwner(resource.data.sellerId)
+                        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['acknowledged', 'acknowledgedAt']));
+      
+      // Only admins can delete warnings
+      allow delete: if isAdmin();
+    }
+
+    /* ===========================
+       🗑️ PRODUCT DELETIONS COLLECTION (Admin Audit Log)
+    =========================== */
+    match /product_deletions/{deletionId} {
+      // Only admins can read, write, and delete
+      allow read, write, delete: if isAdmin();
+    }
+
+    /* ===========================
+       📋 VERIFICATIONS COLLECTION
+    =========================== */
+    match /verifications/{userId} {
+      // Users can create their own verification request
+      allow create: if isSignedIn() && isOwner(userId);
+      
+      // Users can read their own verification
+      // Admins can read all verifications
+      allow read: if isAdmin() || isOwner(userId);
+      
+      // Only admins can update verifications (approve/reject)
+      allow update: if isAdmin();
+      
+      // Only admins can delete verifications
+      allow delete: if isAdmin();
+    }
+
+    /* ===========================
+       🐛 APP REPORTS COLLECTION
+    =========================== */
+    match /app_reports/{reportId} {
+      // Users can create app reports
+      allow create: if isSignedIn();
+      
+      // Admins can read all reports
+      // Users can read their own reports
+      allow read: if isAdmin() || (isSignedIn() && isOwner(resource.data.userId));
+      
+      // Only admins can update app reports
+      allow update: if isAdmin();
+      
+      // Only admins can delete app reports
+      allow delete: if isAdmin();
+    }
+
+    /* ===========================
+       💰 PAYMENTS COLLECTION (if exists)
+    =========================== */
+    match /payments/{paymentId} {
+      allow read: if isSignedIn() 
+                  && (isOwner(resource.data.userId) || isAdmin());
+      allow create: if isSignedIn();
+      allow update, delete: if isAdmin();
+    }
+
+    /* ===========================
+       🔍 COLLECTION GROUP ACCESS
+    =========================== */
+    match /{path=**}/reviews/{reviewId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+    
+    match /{path=**}/notifications/{notificationId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+  }
+}
+
